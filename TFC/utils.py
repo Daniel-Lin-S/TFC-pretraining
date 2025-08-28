@@ -93,3 +93,17 @@ def copy_Files(destination, data_type):
     copy(f"models/model.py", os.path.join(destination_dir, f"model.py"))
     copy("models/loss.py", os.path.join(destination_dir, "loss.py"))
     copy("models/TC.py", os.path.join(destination_dir, "TC.py"))
+
+def one_hot_encoding(X):
+    """
+    Encoding labels into one-hot vectors.
+
+    Parameters
+    ----------
+    X : array-like, shape (n_samples,)
+        The class labels to be encoded.
+    """
+    X = [int(x) for x in X]
+    n_values = np.max(X) + 1
+    b = np.eye(n_values)[X]
+    return b

@@ -1,10 +1,12 @@
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
+import torch.fft as fft
 import os
 import numpy as np
-from augmentations import DataTransform_FD, DataTransform_TD
-import torch.fft as fft
+from typing import Tuple
+
+from .augmentations import DataTransform_FD, DataTransform_TD
 
 def generate_freq(dataset, config):
     X_train = dataset["samples"]
@@ -37,17 +39,38 @@ def generate_freq(dataset, config):
     return (X_train, y_train, x_data_f)
 
 class Load_Dataset(Dataset):
-    # Initialize your data, download, etc.
-    def __init__(self, dataset, config, training_mode, target_dataset_size=64, subset=False):
+    """
+    Load dataset and perform augmentations.
+    """
+    def __init__(
+            self, dataset: dict, config, training_mode: str,
+            target_dataset_size: int=64, subset: bool=False
+        ):
+        """
+        Parameters
+        ----------
+        dataset : dict
+            A dictionary containing 'samples' and 'labels'.
+        config : object
+            Configuration object with necessary attributes.
+            - TSlength_aligned : int, the aligned time series length.
+            - batch_size : int, batch size for source dataset.
+            - target_batch_size : int, batch size for target dataset.
+        target_dataset_size : int
+            The size of the target dataset, used when subset=True.
+        training_mode : str
+            'pre_train' or 'fine_tune_test'.
+            'pre_train': self-supervised pre-training;
+            'fine_tune_test': supervised fine-tuning and testing.
+        subset : bool
+            If True, only use a subset of the dataset for debugging.
+        """
         super(Load_Dataset, self).__init__()
         self.training_mode = training_mode
         X_train = dataset["samples"]
         y_train = dataset["labels"]
         # shuffle
-        data = list(zip(X_train, y_train))
-        np.random.shuffle(data)
-        X_train, y_train = zip(*data)
-        X_train, y_train = torch.stack(list(X_train), dim=0), torch.stack(list(y_train), dim=0)
+        X_train, y_train = shuffle(X_train, y_train)
 
         if len(X_train.shape) < 3:
             X_train = X_train.unsqueeze(2)
@@ -58,7 +81,7 @@ class Load_Dataset(Dataset):
         """Align the TS length between source and target datasets"""
         X_train = X_train[:, :1, :int(config.TSlength_aligned)] # take the first 178 samples
 
-        """Subset for debugging"""
+        # Subset for debugging
         if subset == True:
             subset_size = target_dataset_size * 10 #30 #7 # 60*1
             """if the dimension is larger than 178, take the first 178 dimensions. If multiple channels, take the first channel"""
@@ -76,14 +99,13 @@ class Load_Dataset(Dataset):
         """Transfer x_data to Frequency Domain. If use fft.fft, the output has the same shape; if use fft.rfft, 
         the output shape is half of the time window."""
 
-        window_length = self.x_data.shape[-1]
-        self.x_data_f = fft.fft(self.x_data).abs() #/(window_length) # rfft for real value inputs.
+        self.x_data_f = fft.fft(self.x_data).abs()
         self.len = X_train.shape[0]
 
-        """Augmentation"""
-        if training_mode == "pre_train":  # no need to apply Augmentations in other modes
+        # Augmentation
+        if training_mode == "pre_train":
             self.aug1 = DataTransform_TD(self.x_data, config)
-            self.aug1_f = DataTransform_FD(self.x_data_f, config) # [7360, 1, 90]
+            self.aug1_f = DataTransform_FD(self.x_data_f, config)
 
     def __getitem__(self, index):
         if self.training_mode == "pre_train":
@@ -97,16 +119,81 @@ class Load_Dataset(Dataset):
         return self.len
 
 
-def data_generator(sourcedata_path, targetdata_path, configs, training_mode, subset=True):
-    train_dataset = torch.load(os.path.join(sourcedata_path, "train.pt"))
-    finetune_dataset = torch.load(os.path.join(targetdata_path, "train.pt"))  # train.pt
-    test_dataset = torch.load(os.path.join(targetdata_path, "test.pt"))  # test.pt
-    """In pre-training: 
-    train_dataset: [371055, 1, 178] from SleepEEG.    
-    finetune_dataset: [60, 1, 178], test_dataset: [11420, 1, 178] from Epilepsy"""
+def shuffle(X_train, y_train):
+    """
+    Shuffle the dataset.
+
+    Parameters
+    ----------
+    X_train : array-like, shape (n_samples, n_features)
+        The input samples.
+    y_train : array-like, shape (n_samples,)
+        The class labels.
+    """
+    data = list(zip(X_train, y_train))
+    np.random.shuffle(data)
+    X_train, y_train = zip(*data)
+    X_train = [torch.tensor(x) if not isinstance(x, torch.Tensor) else x for x in X_train]
+    y_train = [torch.tensor(y) if not isinstance(y, torch.Tensor) else y for y in y_train]
+    X_train, y_train = torch.stack(X_train, dim=0), torch.stack(y_train, dim=0)
+
+    return X_train, y_train
+
+
+def data_generator(
+        sourcedata_path: str, targetdata_path: str, configs,
+        training_mode: str, subset: bool=True
+    ) -> Tuple[DataLoader, DataLoader, DataLoader]:
+    """
+    Generate data loaders for source and target datasets.
+
+    Parameters
+    ----------
+    sourcedata_path : str
+        Path to the source dataset directory,
+        with file train.pt inside.
+    targetdata_path : str
+        Path to the target dataset directory,
+        with files train.pt and test.pt inside.
+    configs : object
+        Configuration object with necessary attributes.
+        - batch_size : int, batch size for source dataset.
+        - target_batch_size : int, batch size for target dataset.
+        - drop_last : bool, whether to drop the last incomplete batch.
+    training_mode : str
+        'pre_train' or 'fine_tune_test'.
+        'pre_train': self-supervised pre-training;
+        'fine_tune_test': supervised fine-tuning and testing.
+    subset : bool
+        If True, only use a subset of the dataset for debugging.
+    """
+    training_path = os.path.join(sourcedata_path, "train.pt")
+    finetune_path = os.path.join(targetdata_path, "train.pt")
+    test_path = os.path.join(targetdata_path, "test.pt")
+
+    if not os.path.exists(training_path):
+        raise ValueError(
+            f"Cannot find file train.pt in {sourcedata_path}. "
+            "Please download the dataset first. "
+        )
+    if not os.path.exists(finetune_path):
+        raise ValueError(
+            f"Cannot find file train.pt in {targetdata_path}. "
+            "Please download the dataset first. "
+        )
+    if not os.path.exists(test_path):
+        raise ValueError(
+            f"Cannot find file test.pt in {targetdata_path}. "
+            "Please download the dataset first. "
+        )
+
+    train_dataset = torch.load(training_path, weights_only=False)
+    finetune_dataset = torch.load(finetune_path, weights_only=False)
+    test_dataset = torch.load(test_path, weights_only=False)
 
     # subset = True # if true, use a subset for debugging.
-    train_dataset = Load_Dataset(train_dataset, configs, training_mode, target_dataset_size=configs.batch_size, subset=subset) # for self-supervised, the data are augmented here
+    train_dataset = Load_Dataset(
+        train_dataset, configs, training_mode, target_dataset_size=configs.batch_size, subset=subset)
     finetune_dataset = Load_Dataset(finetune_dataset, configs, training_mode, target_dataset_size=configs.target_batch_size, subset=subset)
     test_dataset = Load_Dataset(test_dataset, configs, training_mode,
                                 target_dataset_size=configs.target_batch_size, subset=False)

@@ -1,6 +1,5 @@
-**/__pycache__/
-**/.DS_Store
-old_README.md
+__pycache__
+.DS_Store
 **/.idea
 datasets
 *.log

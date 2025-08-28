@@ -3,15 +3,10 @@
 from sklearn.metrics import roc_auc_score, classification_report, confusion_matrix, \
     average_precision_score, accuracy_score, precision_score,f1_score,recall_score
 from sklearn.neighbors import KNeighborsClassifier
-import torch,os
-import numpy as np
+import torch
+import os
 
-
-def one_hot_encoding(X):
-    X = [int(x) for x in X]
-    n_values = np.max(X) + 1
-    b = np.eye(n_values)[X]
-    return b
+from .utils import one_hot_encoding
 
 traindata = torch.load(os.path.join('../../datasets/Epilepsy', "test.pt"))
 valdata = torch.load(os.path.join('../../datasets/Epilepsy', "val.pt"))

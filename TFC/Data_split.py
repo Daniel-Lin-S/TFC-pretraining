@@ -4,7 +4,6 @@ This is an example on Epilepsy dataset. -- Xiang Zhang, Jan 16, 2023"""
 
 import torch
 import os
-import numpy as np
 
 targetdata_path = f"../../datasets/Epilepsy/"
 
